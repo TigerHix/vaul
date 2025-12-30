@@ -1,9 +1,9 @@
 import React from 'react';
-import { DrawerDirection } from './types';
+import type { DrawerDirection } from './types';
 
 interface DrawerContextValue {
-  drawerRef: React.RefObject<HTMLDivElement>;
-  overlayRef: React.RefObject<HTMLDivElement>;
+  drawerRef: React.RefObject<HTMLDivElement | null>;
+  overlayRef: React.RefObject<HTMLDivElement | null>;
   onPress: (event: React.PointerEvent<HTMLDivElement>) => void;
   onRelease: (event: React.PointerEvent<HTMLDivElement> | null) => void;
   onDrag: (event: React.PointerEvent<HTMLDivElement>) => void;

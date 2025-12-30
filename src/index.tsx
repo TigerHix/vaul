@@ -18,11 +18,11 @@ import {
   WINDOW_TOP_OFFSET,
   DRAG_CLASS,
 } from './constants';
-import { DrawerDirection } from './types';
+import type { DrawerDirection } from './types';
 import { useControllableState } from './use-controllable-state';
 import { useScaleBackground } from './use-scale-background';
 import { usePositionFixed } from './use-position-fixed';
-import { isIOS, isMobileFirefox } from './browser';
+import { isAndroid, isIOS, isMobileFirefox } from './browser';
 
 export interface WithFadeFromProps {
   /**
@@ -159,7 +159,7 @@ export function Root({
   noBodyStyles = false,
   direction = 'bottom',
   defaultOpen = false,
-  disablePreventScroll = true,
+  disablePreventScroll = false,
   snapToSequentialPoint = false,
   preventScrollRestoration = false,
   repositionInputs = true,
@@ -196,6 +196,14 @@ export function Root({
     },
   });
   const [hasBeenOpened, setHasBeenOpened] = React.useState<boolean>(false);
+  
+  // Fix for controlled mode: ensure hasBeenOpened is set when isOpen becomes true
+  React.useEffect(() => {
+    if (isOpen && !hasBeenOpened) {
+      setHasBeenOpened(true);
+    }
+  }, [isOpen, hasBeenOpened]);
+  
   const [isDragging, setIsDragging] = React.useState<boolean>(false);
   const [justReleased, setJustReleased] = React.useState<boolean>(false);
   const overlayRef = React.useRef<HTMLDivElement>(null);
@@ -209,6 +217,11 @@ export function Root({
   const keyboardIsOpen = React.useRef(false);
   const shouldAnimate = React.useRef(!defaultOpen);
   const previousDiffFromInitial = React.useRef(0);
+  // Some iOS/WKWebView environments report transient `visualViewport.height` values like `0`
+  // (or extremely small numbers) during browser UI transitions. Using those values in height/
+  // transform calculations can push the drawer off-screen. We keep a "last known good" height
+  // and ignore obviously invalid measurements.
+  const lastKnownVisualViewportHeight = React.useRef(0);
   const drawerRef = React.useRef<HTMLDivElement>(null);
   const drawerHeightRef = React.useRef(drawerRef.current?.getBoundingClientRect().height || 0);
   const drawerWidthRef = React.useRef(drawerRef.current?.getBoundingClientRect().width || 0);
@@ -241,9 +254,9 @@ export function Root({
     snapToSequentialPoint,
   });
 
+  const preventScrollDisabled = !isOpen || isDragging || !modal || justReleased || !hasBeenOpened || !repositionInputs || disablePreventScroll;
   usePreventScroll({
-    isDisabled:
-      !isOpen || isDragging || !modal || justReleased || !hasBeenOpened || !repositionInputs || !disablePreventScroll,
+    isDisabled: preventScrollDisabled,
   });
 
   const { restorePositionSetting } = usePositionFixed({
@@ -475,12 +488,49 @@ export function Root({
 
   React.useEffect(() => {
     function onVisualViewportChange() {
+      // Skip entirely if repositionInputs is false
       if (!drawerRef.current || !repositionInputs) return;
+      // Skip if drawer is not open (prevents issues when switching apps)
+      if (!isOpen) return;
 
       const focusedElement = document.activeElement as HTMLElement;
       if (isInput(focusedElement) || keyboardIsOpen.current) {
-        const visualViewportHeight = window.visualViewport?.height || 0;
         const totalHeight = window.innerHeight;
+        const rawVisualViewportHeight = window.visualViewport?.height;
+
+        const visualViewportHeight = (() => {
+          const candidate =
+            typeof rawVisualViewportHeight === 'number' && Number.isFinite(rawVisualViewportHeight)
+              ? rawVisualViewportHeight
+              : 0;
+
+          const fallback =
+            lastKnownVisualViewportHeight.current > 0
+              ? lastKnownVisualViewportHeight.current
+              : typeof totalHeight === 'number' && Number.isFinite(totalHeight) && totalHeight > 0
+              ? totalHeight
+              : 0;
+
+          // Ignore `0`/NaN/negative values (known to occur transiently on iOS/WKWebView).
+          if (candidate <= 0) return fallback;
+
+          // Also ignore extremely small values on normal-sized viewports; these are almost always transient.
+          // (Example: permission sheets / browser chrome animations reporting 0~80px for a frame.)
+          if (
+            typeof totalHeight === 'number' &&
+            Number.isFinite(totalHeight) &&
+            totalHeight > 300 &&
+            candidate < 100
+          ) {
+            return fallback;
+          }
+
+          // Clamp to totalHeight when available to avoid negative diffs.
+          const safe = typeof totalHeight === 'number' && Number.isFinite(totalHeight) && totalHeight > 0 ? Math.min(candidate, totalHeight) : candidate;
+          lastKnownVisualViewportHeight.current = safe;
+          return safe;
+        })();
+
         // This is the height of the keyboard
         let diffFromInitial = totalHeight - visualViewportHeight;
         const drawerHeight = drawerRef.current.getBoundingClientRect().height || 0;
@@ -504,19 +554,26 @@ export function Root({
         previousDiffFromInitial.current = diffFromInitial;
         // We don't have to change the height if the input is in view, when we are here we are in the opened keyboard state so we can correctly check if the input is in view
         if (drawerHeight > visualViewportHeight || keyboardIsOpen.current) {
-          const height = drawerRef.current.getBoundingClientRect().height;
-          let newDrawerHeight = height;
+          // Use initialDrawerHeight (not current DOM height) to avoid compounding height increases
+          const baseHeight = initialDrawerHeight.current || drawerRef.current.getBoundingClientRect().height;
+          let newDrawerHeight = baseHeight;
 
-          if (height > visualViewportHeight) {
+          if (baseHeight > visualViewportHeight) {
             newDrawerHeight = visualViewportHeight - (isTallEnough ? offsetFromTop : WINDOW_TOP_OFFSET);
           }
           // When fixed, don't move the drawer upwards if there's space, but rather only change it's height so it's fully scrollable when the keyboard is open
           if (fixed) {
-            drawerRef.current.style.height = `${height - Math.max(diffFromInitial, 0)}px`;
+            drawerRef.current.style.height = `${Math.max(baseHeight - Math.max(diffFromInitial, 0), 0)}px`;
           } else {
-            drawerRef.current.style.height = `${Math.max(newDrawerHeight, visualViewportHeight - offsetFromTop)}px`;
+            // Cap height to never exceed initial drawer height
+            const maxAllowedHeight = initialDrawerHeight.current || baseHeight;
+            const finalHeight = Math.min(
+              Math.max(newDrawerHeight, visualViewportHeight - offsetFromTop),
+              maxAllowedHeight
+            );
+            drawerRef.current.style.height = `${finalHeight}px`;
           }
-        } else if (!isMobileFirefox()) {
+        } else if (!isMobileFirefox() && !isAndroid()) {
           drawerRef.current.style.height = `${initialDrawerHeight.current}px`;
         }
 
@@ -531,7 +588,67 @@ export function Root({
 
     window.visualViewport?.addEventListener('resize', onVisualViewportChange);
     return () => window.visualViewport?.removeEventListener('resize', onVisualViewportChange);
-  }, [activeSnapPointIndex, snapPoints, snapPointsOffset]);
+  }, [activeSnapPointIndex, snapPoints, snapPointsOffset, isOpen, repositionInputs]);
+
+  // iOS Safari viewport reset on keyboard close
+  // This fixes the "freeze" issue where the viewport gets stuck after keyboard dismissal
+  React.useEffect(() => {
+    if (!isOpen) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    
+    let lastHeight = vv.height;
+    let resetTimeout: ReturnType<typeof setTimeout> | null = null;
+    
+    const handleViewportResize = () => {
+      const newHeight = vv.height;
+      const heightDiff = newHeight - lastHeight;
+      
+      // Keyboard closing = viewport height INCREASING significantly (>100px)
+      if (heightDiff > 100) {
+        // Debounce - only reset once after keyboard fully closes
+        if (resetTimeout) clearTimeout(resetTimeout);
+        resetTimeout = setTimeout(() => {
+          // Force viewport reset by:
+          // 1. Scrolling to 0 then back
+          // 2. Forcing a transform "jolt" on the drawer (mimics what dragging does)
+          const scrollY = window.scrollY;
+          const scrollX = window.scrollX;
+          
+          window.scrollTo(0, 0);
+          
+          // Force a tiny transform animation on the drawer to wake up iOS Safari
+          if (drawerRef.current) {
+            const el = drawerRef.current;
+            const currentTransform = el.style.transform || '';
+            // Add a tiny translate, then remove it
+            el.style.transition = 'none';
+            el.style.transform = currentTransform + ' translateY(1px)';
+            
+            requestAnimationFrame(() => {
+              el.style.transform = currentTransform;
+              window.scrollTo(scrollX, scrollY);
+              
+              // Also force a repaint by reading offsetHeight
+              void el.offsetHeight;
+            });
+          } else {
+            requestAnimationFrame(() => {
+              window.scrollTo(scrollX, scrollY);
+            });
+          }
+        }, 100);
+      }
+      
+      lastHeight = newHeight;
+    };
+    
+    vv.addEventListener('resize', handleViewportResize);
+    return () => {
+      vv.removeEventListener('resize', handleViewportResize);
+      if (resetTimeout) clearTimeout(resetTimeout);
+    };
+  }, [isOpen]);
 
   function closeDrawer(fromWithin?: boolean) {
     cancelDrag();

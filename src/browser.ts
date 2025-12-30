@@ -34,3 +34,7 @@ export function isIOS(): boolean | undefined {
 export function testPlatform(re: RegExp): boolean | undefined {
   return typeof window !== 'undefined' && window.navigator != null ? re.test(window.navigator.platform) : undefined;
 }
+
+export function isAndroid(): boolean | undefined {
+  return /Android/.test(navigator.userAgent);
+}
