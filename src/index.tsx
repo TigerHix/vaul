@@ -862,6 +862,9 @@ export function Root({
     }
   }, [modal]);
 
+  // Pass modal={false} to Radix to disable its aggressive FocusScope that breaks portaled popups.
+  // Vaul implements its own modal behavior (scroll lock via usePreventScroll, overlay, backdrop dismiss).
+  // The vaul Overlay component checks vaul's context 'modal' prop, so it still renders when user passes modal={true}.
   return (
     <DialogPrimitive.Root
       defaultOpen={defaultOpen}
@@ -876,7 +879,7 @@ export function Root({
         setIsOpen(open);
       }}
       open={isOpen}
-      modal={modal}
+      modal={false}
     >
       <DrawerContext.Provider
         value={{
@@ -917,7 +920,7 @@ export function Root({
   );
 }
 
-export const Overlay = React.forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>>(
+export const Overlay = React.forwardRef<HTMLDivElement, React.ComponentPropsWithoutRef<'div'>>(
   function ({ ...rest }, ref) {
     const { overlayRef, snapPoints, onRelease, shouldFade, isOpen, modal, shouldAnimate } = useDrawerContext();
     const composedRef = useComposedRefs(ref, overlayRef);
@@ -929,8 +932,9 @@ export const Overlay = React.forwardRef<HTMLDivElement, React.ComponentPropsWith
       return null;
     }
 
+    // Use a plain div instead of DialogPrimitive.Overlay to avoid issues when Radix modal={false}
     return (
-      <DialogPrimitive.Overlay
+      <div
         onMouseUp={onMouseUp}
         ref={composedRef}
         data-vaul-overlay=""
@@ -1054,6 +1058,21 @@ export const Content = React.forwardRef<HTMLDivElement, ContentProps>(function (
           return;
         }
 
+        // Don't close drawer when clicking on portaled popup content (Select, Menu, etc.)
+        const target = e.target as HTMLElement;
+        if (target) {
+          const isPopupEl = target.closest('[role="listbox"]') || // Select popup
+                          target.closest('[role="menu"]') || // Menu popup
+                          target.closest('[role="dialog"]') || // Nested dialog
+                          target.closest('[data-radix-popper-content-wrapper]') || // Radix popper
+                          target.closest('[data-floating-ui-portal]') || // Floating UI
+                          target.closest('[data-base-ui-portal]'); // Base UI portal
+          if (isPopupEl) {
+            e.preventDefault();
+            return;
+          }
+        }
+
         if (keyboardIsOpen.current) {
           keyboardIsOpen.current = false;
         }
@@ -1062,6 +1081,21 @@ export const Content = React.forwardRef<HTMLDivElement, ContentProps>(function (
         if (!modal) {
           e.preventDefault();
           return;
+        }
+        
+        // Don't close drawer when focus moves to portaled popup content
+        const target = e.target as HTMLElement;
+        if (target) {
+          const isPopupEl = target.closest('[role="listbox"]') ||
+                          target.closest('[role="menu"]') ||
+                          target.closest('[role="dialog"]') ||
+                          target.closest('[data-radix-popper-content-wrapper]') ||
+                          target.closest('[data-floating-ui-portal]') ||
+                          target.closest('[data-base-ui-portal]');
+          if (isPopupEl) {
+            e.preventDefault();
+            return;
+          }
         }
       }}
       onPointerMove={(event) => {
