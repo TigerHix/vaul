@@ -1058,12 +1058,13 @@ export const Content = React.forwardRef<HTMLDivElement, ContentProps>(function (
           return;
         }
 
-        // Don't close drawer when clicking on portaled popup content (Select, Menu, etc.)
+        // Don't close drawer when clicking on portaled popup content (Select, Menu, Popover, etc.)
         const target = e.target as HTMLElement;
         if (target) {
           const isPopupEl = target.closest('[role="listbox"]') || // Select popup
                           target.closest('[role="menu"]') || // Menu popup
                           target.closest('[role="dialog"]') || // Nested dialog
+                          target.closest('[role="tooltip"]') || // Popover
                           target.closest('[data-radix-popper-content-wrapper]') || // Radix popper
                           target.closest('[data-floating-ui-portal]') || // Floating UI
                           target.closest('[data-base-ui-portal]'); // Base UI portal
@@ -1078,25 +1079,11 @@ export const Content = React.forwardRef<HTMLDivElement, ContentProps>(function (
         }
       }}
       onFocusOutside={(e) => {
-        if (!modal) {
-          e.preventDefault();
-          return;
-        }
-        
-        // Don't close drawer when focus moves to portaled popup content
-        const target = e.target as HTMLElement;
-        if (target) {
-          const isPopupEl = target.closest('[role="listbox"]') ||
-                          target.closest('[role="menu"]') ||
-                          target.closest('[role="dialog"]') ||
-                          target.closest('[data-radix-popper-content-wrapper]') ||
-                          target.closest('[data-floating-ui-portal]') ||
-                          target.closest('[data-base-ui-portal]');
-          if (isPopupEl) {
-            e.preventDefault();
-            return;
-          }
-        }
+        // ALWAYS prevent focus-based dismissal.
+        // Since we use modal={false} on Radix DialogPrimitive.Root to allow popups to work,
+        // we get spurious onFocusOutside events (e.g., when drawer opens and focus is still on trigger button).
+        // Dismissal via overlay click is handled by onPointerDownOutside, so focus-based dismissal is not needed.
+        e.preventDefault();
       }}
       onPointerMove={(event) => {
         lastKnownPointerEventRef.current = event;
