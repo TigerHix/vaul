@@ -254,7 +254,8 @@ export function Root({
     snapToSequentialPoint,
   });
 
-  const preventScrollDisabled = !isOpen || isDragging || !modal || justReleased || !hasBeenOpened || !repositionInputs || disablePreventScroll;
+  // Note: repositionInputs should NOT affect scroll prevention - it only controls input repositioning behavior
+  const preventScrollDisabled = !isOpen || isDragging || !modal || justReleased || !hasBeenOpened || disablePreventScroll;
   usePreventScroll({
     isDisabled: preventScrollDisabled,
   });
